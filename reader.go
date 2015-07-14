@@ -1,7 +1,9 @@
 package manta
 
 import (
+	"bufio"
 	"encoding/binary"
+	"io"
 	"math"
 )
 
@@ -12,6 +14,7 @@ var (
 
 // A reader holds a buffer and performs read operations against it.
 type reader struct {
+	r    io.ReadCloser
 	buf  []byte
 	size int
 	pos  int
@@ -19,7 +22,36 @@ type reader struct {
 
 // Creates a new reader object with a given buffer.
 func newReader(buf []byte) *reader {
-	return &reader{buf, len(buf) * 8, 0}
+	return &reader{nil, buf, len(buf) * 8, 0}
+}
+
+// Creates a new reader object that gets data from r. r will be closed if there
+// is an error or length bytes have been read.
+func newReaderAsync(r io.ReadCloser, length int) *reader {
+	return &reader{&struct {
+		*bufio.Reader
+		io.Closer
+	}{bufio.NewReader(r), r}, make([]byte, 0, length), length * 8, 0}
+}
+
+// Makes sure r.buf has enough data to read n bits.
+func (r *reader) ensureBits(n int) {
+	if r.r == nil {
+		return
+	}
+
+	need := (r.pos + n + 7) / 8
+	_, err := io.ReadFull(r.r, r.buf[len(r.buf):need])
+	if err != nil {
+		r.r.Close()
+		_panicf("read failed: %v", err)
+	}
+	r.buf = r.buf[:need]
+
+	if len(r.buf) == cap(r.buf) {
+		r.r.Close()
+		r.r = nil
+	}
 }
 
 // Calculates our byte position.
@@ -139,6 +171,7 @@ func (r *reader) readBoolean() bool {
 		_panicf("read overflow: no bits left")
 	}
 
+	r.ensureBits(1)
 	b := r.buf[r.pos/8]&(1<<uint(r.pos%8)) != 0
 	r.pos += 1
 	return b
@@ -148,16 +181,13 @@ func (r *reader) readBoolean() bool {
 func (r *reader) readUBitVar() uint32 {
 	ret := r.readBits(6)
 
-	switch (ret & 0x30) {
+	switch ret & 0x30 {
 	case 16:
-		ret = (ret & 15) | (r.readBits(4) << 4);
-		break;
+		ret = (ret & 15) | (r.readBits(4) << 4)
 	case 32:
-		ret = (ret & 15) | (r.readBits(8) << 4);
-		break;
+		ret = (ret & 15) | (r.readBits(8) << 4)
 	case 48:
-		ret = (ret & 15) | (r.readBits(28) << 4);
-		break;
+		ret = (ret & 15) | (r.readBits(28) << 4)
 	}
 
 	return ret
@@ -182,6 +212,8 @@ func (r *reader) readBytes(n int) []byte {
 		_panicf("read overflow: %d bits requested, only %d remaining", n*8, r.remBits())
 	}
 
+	r.ensureBits(n * 8)
+
 	// Fast path if our position is byte-aligned.
 	if r.pos%8 == 0 {
 		bpos := r.pos / 8
@@ -204,7 +236,7 @@ func (r *reader) readStringN(n int) string {
 
 // Read a null terminated string.
 func (r *reader) readString() string {
-	buf := make([]byte, 0)
+	var buf []byte
 	for {
 		b := r.readByte()
 		if b == 0 {
@@ -261,6 +293,8 @@ func (r *reader) readBits(n int) uint32 {
 	if n > 32 {
 		_panicf("invalid read: %d is greater than maximum read of 32 bits", n)
 	}
+
+	r.ensureBits(n)
 
 	bitOffset := r.pos % 8
 	nBitsToRead := bitOffset + n

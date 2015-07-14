@@ -2,7 +2,7 @@ package manta
 
 import (
 	"bytes"
-	"io/ioutil"
+	"os"
 
 	"github.com/dotabuff/manta/dota"
 	"github.com/golang/snappy"
@@ -43,17 +43,32 @@ type Parser struct {
 
 // Create a new Parser from a file on disk.
 func NewParserFromFile(path string) (*Parser, error) {
-	buf, err := ioutil.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewParser(buf)
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+
+	if fi.Size()*8 > 1<<31-1 {
+		f.Close()
+		return nil, _errorf("manta: file is too big (%d bytes)", fi.Size())
+	}
+
+	return newParser(newReaderAsync(f, int(fi.Size())))
 }
 
 // Create a new parser from a byte slice.
 func NewParser(buf []byte) (*Parser, error) {
-	// Create a new parser with an internal reader for the given buffer.
+	return newParser(newReader(buf))
+}
+
+// Create a new parser with an internal reader for the given buffer.
+func newParser(r *reader) (*Parser, error) {
 	parser := &Parser{
 		Callbacks:  &Callbacks{},
 		GameEvents: &GameEvents{},
@@ -61,7 +76,7 @@ func NewParser(buf []byte) (*Parser, error) {
 		Tick:    0,
 		NetTick: 0,
 
-		reader:     newReader(buf),
+		reader:     r,
 		isStopping: false,
 
 		classInfo:      make(map[int32]string),
