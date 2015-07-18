@@ -99,9 +99,13 @@ func main() {
 
 		handlerOut += fmt.Sprintf(`
       case %d: // %s
+        if len(m.GetKeys()) < %d {
+	  _debugf("short %s: %%v", m)
+	  return nil
+        }
         if cbs := ge.%s; cbs != nil {
           msg := &%s{}
-          `, eventId, constSig, cbInt, typeSig)
+          `, eventId, constSig, len(d.GetKeys()), constSig, cbInt, typeSig)
 
 		for i, k := range d.GetKeys() {
 			fieldName := camelCase(k.GetName(), true)
