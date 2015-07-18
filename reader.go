@@ -195,6 +195,8 @@ func (r *reader) readUBitVar() uint32 {
 
 // Reads the next byte (8 bits) in the buffer.
 func (r *reader) readByte() byte {
+	r.ensureBits(8)
+
 	// Fast path if our position is byte-aligned.
 	if r.pos%8 == 0 && r.pos+8 <= r.size {
 		bpos := r.pos / 8
